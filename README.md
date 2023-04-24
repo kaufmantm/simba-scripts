@@ -1,5 +1,5 @@
 # Simba scripts
-[Simba](http://wizzup.org/simba/) is an automation program for repeating complicated tasks by finding and reading colours on the screen, and simulating the mouse and key board. Simba scripts are written in a scripting language which is a limited subset of Pascal. Simba, together with the SRL Resource Library, is primarily used to automate the MMORPG RuneScape.
+[Simba](http://wizzup.org/simba/) is an automation program for repeating complicated tasks by finding and reading colours on the screen, and simulating the mouse and key board. Simba scripts are written in a scripting language which is a limited subset of Pascal. Simba, together with the [SRL Resource Library](https://github.com/SRL/SRL), is primarily used to automate the MMORPG RuneScape.
 
 My first experiences programming were with Simba and SRL. In this repository, I have collected some of the scripts I published on the [SRL-Forum](http://villavu.com).
 
