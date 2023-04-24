@@ -1,0 +1,987 @@
+program MasterDivination;
+{$DEFINE SMART}
+{$I SRL-6/SRL.simba}
+{$I SPS/LIB/SPS-RS3.simba}
+//{$DEFINE TESTMODE} //For testing purposes only - leave commented out
+
+
+{
+  Setup:
+    * Be at the divination spot you want
+    * Fill out DeclarePlayers (Lines 139-160)
+      * loginName := 'login name or email';     Your login name or email goes between the apostrophes
+      * password := 'password';                 Your password goes between the apostrophes
+      * world := -1;                            Leave as -1 to go to a random world or set to a world of your choice
+      * integers[divLocation] := wispsRadiant;  choose what wisps you want to train at. Format is wisps<WispName>
+      * integers[riftOption] := toExp;          choose which of the 3 ways you want to use your memories (toEnergy, toExp, or toBonusExp)
+      * integers[minPlayTime] := 420;           minimum time in minutes to play before breaking
+      * integers[maxPlayTime] := 480;           maximum time in minutes to play before breaking
+      * integers[minBreakTime] := 300;          minimum time in minutes to break before resuming
+      * integers[maxBreakTime] := 330;          maximum time in minutes to break before resuming
+      * isActive := True;                       leave this as true
+    * Make sure you have your interface setup for typical SRL usage
+    * If you want to track xp gained and xp/hr, you must have an all type experience tracker or divination experience tracker over the chat bar (a la http://puu.sh/9IHD2/f9497c7587.png)
+    * Familiar Setup (Optional):
+      * Put Buff/Debuff bar over action bar (See thread for image)
+      * Put chosen familiar pouches and your choice of potion for restoring summoning points (summoning pot or super restore pot)
+      * Define which familiar you're going to use and the hotkeys of the afforementioned action bar slots in declarePlayers (default for pots is 1, default for pouches is 2)
+
+  Script Features:
+    * Customizable break system
+    * Fast detection of when we're done siphoning or depositing memories (kudos footballjds for some of his methods. check out his div script at https://villavu.com/forum/showthread.php?t=106925)
+    * Predictive clicking - this script clicks the rift while running towards it most of the time, which resulted in a huge xp/hr boost and is the main reason I'm even bothering publishing this script
+    * Antiban - I am very satisfied with the AntiBan I put in my scripts, and I think you will be too
+    * Any div spot - Works with any divination spot. Anyone with basic knowledge of color scripting and sps can set up whatever spot they want to train at
+      * The release version of this script will only have the level 80 and 85 spots. I'll add the others when I have time or someone requests them.
+        * If anyone makes maps and sets up colors for any spot that's not already here I'll put it in the script for others to use!
+    * Enriched wisp prioritization
+    * Guthix Cache support - will still click the rift when the color changes due to Guthixian Cache D&D
+    * Familiar support - Supports Light Creature and Nightmare Muspah familiar usage.
+
+  Credits:
+    * Footballjds - I straight up ripped a few ideas/methods off of him. Kudos to him. Check his divination script out at the villavu.com URL above!
+    * Ashaman - My antiban method is his (just modified a lot)
+    * i luffs yew - Lots of time spent on skype helping me optimize the script
+    * Clarity - Added familiar support
+
+  Known Bugs:
+    * XP and XP/Hr tracking some times messes up
+      * If this happens it will be obvious as soon as the first Report is printed. Just restart the script.
+    * The script will sometimes click the wisp it is harvesting while already harvesting
+      * I just need to adjust some timing in waitWhileSiphon(). If anything it's pretty human like, it's not really "botty" behavior so I may just leave it
+    * Level 30 spot has weird behavior
+      * It's only the level 30 spot, not going to make severe modifications to save someone a few hours of having to babysit the script
+
+  Spots Supported:
+    [ ] Pale          [ ] Lustrous
+    [ ] Flickering    [ ] Elder
+    [ ] Bright        [x] Brilliant ^1
+    [x] Glowing ^2    [x] Radiant
+    [x] Sparkling     [x] Luminous
+    [ ] Gleaming      [x] Incandescent
+    [ ] Vibrant
+        ^1: Needs enriched wisp values
+        ^2: Odd behavior. Babysit til 40.
+}
+
+
+type TDiv = record
+  wispName, mapName, imgurURL, menuOption, hoverText: string;
+  color, tolerance, enrichedColor, enrichedTolerance: Integer;
+  hueMod, satMod, enrichedHueMod, enrichedSatMod: Extended;
+  siphonLoc, riftLoc: TPoint;
+end;
+
+
+type TRift = record
+  posA, posB, posC: TPoint;
+end;
+
+
+var
+  cDiv, riftDiv, cacheDiv: TDiv; //current div loc, rift color data
+  progressTimer: TTimeMarker;
+
+
+const
+  //Players[].integers
+  divLocation = 0;
+  initialExp = 1;
+  nextBreak = 2;
+  minPlayTime = 3;
+  maxPlayTime = 4;
+  breakDuration = 5;
+  minBreakTime = 6;
+  maxBreakTime = 7;
+  riftOption = 8;
+  whichFamiliar = 9;
+  //rift options
+  toEnergy = 0;
+  toExp = 1;
+  toBonusExp = 2;
+  //Players[].booleans
+  timerStarted = 0;
+  breakTimerStarted = 1;
+  //Players[].strings
+  pouchHotkey = 0;
+  potionHotkey = 1;
+  //wisps
+  wispsNull = -1;
+  wispsPale = 0;
+  wispsFlickering = 1;
+  wispsBright = 2;
+  wispsGlowing = 3;
+  wispsSparkling = 4;
+  wispsGleaming = 5;
+  wispsVibrant = 6;
+  wispsLustrous = 7;
+  wispsElder = 8;
+  wispsBrilliant = 9;
+  wispsRadiant = 10;
+  wispsLuminous = 11;
+  wispsIncandescent = 12;
+  wispsCache = 13;
+  //action states
+  stateSiphon = 0;
+  stateToRift = 1;
+  stateDepositMemories = 2;
+  stateToWisps = 3;
+  resultNoWisps = -1;
+  resultWispMoved = 0;
+  resultSuccess = 1;
+  //familiars
+  familiarNone = 0;
+  familiarMuspah = 1;
+  familiarLight = 2;
+
+
+procedure DeclarePlayers;
+begin
+  setLength(players, 1);
+
+  with players[0] do
+  begin
+    loginName := '';
+    password := '';
+    world := -1;
+    integers[divLocation] := wispsIncandescent;
+    integers[riftOption] := toExp;
+    integers[minPlayTime] := 450;
+    integers[maxPlayTime] := 460;
+    integers[minBreakTime] := 300;
+    integers[maxBreakTime] := 330;
+    isActive := True;
+    //Familiar settings (Optional - leave "familiarNone" if you don't want to use it)
+    integers[whichFamiliar] := familiarNone;
+    strings[potionHotkey] := '1';
+    strings[pouchHotkey] := '2';
+  end;
+end;
+
+
+function TDiv.getPoint(var point: TPoint): Boolean;
+var
+  ATPA: T2DPointArray;
+  TPA: TPointArray;
+  tempCts: Integer;
+begin
+  tempCts := GetToleranceSpeed;
+  SetColorToleranceSpeed(2);
+
+  //find enriched wisps:
+  if self.enrichedColor <> 0 then
+  begin
+    SetToleranceSpeed2Modifiers(self.enrichedHueMod, self.enrichedSatMod);
+    FindColorsTolerance(TPA, self.enrichedColor, mainscreen.getBounds, self.enrichedTolerance);
+  end;
+
+  ATPA := TPA.split(10);
+  ATPA.filterBetween(0,5);
+
+  //find normal wisps:
+  if (Length(ATPA) = 0) then
+  begin
+    SetToleranceSpeed2Modifiers(self.hueMod, self.satMod);
+    FindColorsTolerance(TPA, self.color, mainscreen.getBounds, self.tolerance);
+    ATPA := TPA.split(10);
+    ATPA.filterBetween(0,5);
+  end;
+
+  SetColorToleranceSpeed(tempCts);
+  SetToleranceSpeed2Modifiers(0.2, 0.2);
+  if High(ATPA) < 0 then Exit;
+  ATPA.sortFromMidPoint(mainscreen.getCenterPoint);
+  smartImage.debugATPA(ATPA);
+  point := ATPA[0].getMiddle;
+  Result := True;
+end;
+
+
+function TRift.getPoints: Boolean;
+begin
+  if riftDiv.getPoint(self.posA) then
+  begin
+    wait(100);
+    Result := riftDiv.getPoint(self.posB);
+  end;
+end;
+
+
+//kudos footballjds
+function energyColorCount: integer;
+const
+  ylwClr = 65535;
+begin
+  result := countColor(ylwClr, tabBackpack.getBounds);
+end;
+
+
+var
+  AB: TTimeMarker; //Antiban time marker
+  NextAB: Integer; //when to do next antiban
+
+
+//ashaman88
+//modded for timing + personilization
+Procedure Antiban;
+Var
+  I, ABMin, ETA, h, m, s: Integer;
+Begin
+  if ((AB.time = -1) or (AB.getTime > NextAB)) then
+  begin
+    I := Random(600);
+    Case I Of
+      1..7:
+        Begin
+          hoverSkill(SKILL_DIVINATION);
+          Wait(GaussRangeInt(1000,10000));
+          TabBackpack.Open;
+        End;
+      8..20: mouseMovingObject;
+      21..100: SleepAndMoveMouse(GaussRangeInt(100,1500));
+      101..400:
+        Begin
+          MouseOffClient(Random(4));
+          Wait(GaussRangeInt(0, 2000));
+        End;
+    End;
+    AB.reset; AB.start;
+    NextAB := AB.getTime + 6000 + gaussRangeInt(2000, 6000);
+  end;
+  minimap.setAngle(MM_DIRECTION_NORTH);
+  ETA := NextAB - AB.getTime;
+End;
+
+
+(*
+   Author: Clarity
+   Description: Supports Muspah/Light familiars for increased XP rates.
+*)
+procedure checkFamiliar;
+var
+  familiarDTM, pouchDTM, x, y: integer;
+begin
+  case players[currentPlayer].integers[whichFamiliar] of
+    familiarNone: Exit;
+    familiarMuspah: pouchDTM := DTMFromString('mWAAAAHicY2FgYNBgZ2AwAGIjIJYF4oVMDAwTgHg1EM8G4n3rsoGqmOCYhwEVMKJhEAAAOQcFNA==');
+    familiarLight: pouchDTM := DTMFromString('mlwAAAHicY2dgYBAAYkEGCGAFYlkglgZicSBmBGIhIOYAYn4g5oSqA+kx6VwNJJmwYi6oXlIxFAAA4wYCSw==');
+  else
+    begin
+      print('Invalid setting for players[].integers[whichFamiliar]. Assuming you are not using any familiar.', TDebug.DEBUG);
+      Exit;
+    end;
+  end;
+  familiarDTM := DTMFromString('mrAAAAHic42BgYBAAYn4g5gJiUSCWgWIY4AZiFijNBRVDVjNt7XYGZaBGfX8fhvqttxiipkmiYHagGmY8mJEAhgEAt+EKLQ==');
+  if (findDTM(pouchDTM, x, y, tabBackpack.getBounds())) and (not findDTM(familiarDTM, x, y, actionbar.getBounds())) then
+  begin
+    if (actionbar.getSummoningPercent <= 30) then sendKeys(players[currentPlayer].strings[potionHotkey], 75, 150);
+    wait(150 + random(100));
+    sendKeys(players[currentPlayer].strings[pouchHotkey], 75, 150);
+    wait(150 + random(100));
+  end;
+  if chatbox.findTextOnLines(['ou lose'], [0]) then
+  begin
+    wait(50 + random(150));
+    actionbar.mouseIcon(AB_BAR_SUMMONING, MOUSE_LEFT);
+    sleepAndMoveMouse(250 + random(500));
+    wait(50 + random(150));
+  end;
+  freeDTM(familiarDTM);
+  freeDTM(pouchDTM);
+end;
+
+
+//familiar support added by Clarity.
+procedure waitWhileSiphon;
+var
+  countTimer: TTimeMarker;
+  waitUntil, invCount, ylwCount, xpCount: Integer;
+  p: TPoint;
+begin
+  countTimer.start;
+  waitUntil := countTimer.getTime + RandomRange(3400, 4400);
+  invCount := tabBackpack.count;
+  ylwCount := energyColorCount;
+  xpCount := chatbox.getXPBar;
+  while (waitUntil > countTimer.getTime) do
+  begin
+    Antiban;
+    if (invCount <> tabBackpack.count) or (ylwCount <> energyColorCount) or (xpCount <> chatbox.getXPBar) then
+    begin
+      waitUntil := countTimer.getTime + RandomRange(2150, 2800);
+      invCount := tabBackpack.count;
+      ylwCount := energyColorCount;
+      xpCount := chatbox.getXPBar;
+    end;
+    checkFamiliar;
+    if tabBackpack.isFull then Exit;
+    if findTicket(p) then
+      fastClick(MOUSE_LEFT);
+  end;
+end;
+
+
+function TRift.depositMemories_Predict: Integer;
+begin
+  if not self.getPoints then
+    Exit(resultNoWisps);
+
+  self.posC.x := round(self.posB.x + 2.5 * (self.posB.x - self.posA.x));
+  self.posC.y := round( self.posB.y + 2.5 * (self.posB.y - self.posA.y));
+
+  smartImage.clearArea(mainscreen.getBounds);
+  smartImage.debugATPA([[self.posB], [self.posC]]);
+
+  mouseSpeed := 30;
+  Mouse(self.posc.rand(RandomRange(-8, 8)), MOUSE_MOVE);
+  mouseSpeed := 20;
+  if isMouseOverText([riftDiv.wispName], 1200) then
+  begin
+    GetMousePos(self.posc.x, self.posc.y);
+    Mouse(self.posc, MOUSE_RIGHT);
+    if chooseOption.select([riftDiv.menuOption]) then Result := resultSuccess else Result := resultWispMoved;
+    minimap.waitFlag;
+  end;
+  if Result = resultSuccess then
+    waitWhileSiphon;
+  smartImage.clearArea(mainscreen.getBounds);
+end;
+
+
+procedure Report;
+var
+  XP, XPHR, h, m, s, W: Integer;
+  L1, L2, L3: string;
+begin
+  w := smartImage.getWidth;
+  smartImage.clearArea(IntToBox(592,517, w-1,555));
+  XP := chatbox.getXPBar - Players[0].integers[initialExp];
+  ConvertTime(progressTimer.getTime, h, m, s);
+  XPHR := Round(XP * 1000.0 * (3600.0 / (progressTimer.getTime+1)));
+  L1 := 'Worked: ' + ToString(h) + ' H, ' + ToString(m) + ' M, ' + ToString(s) + ' S';
+  L2 := 'XP: ' + ToString(XP);
+  L3 := 'XP/HR: ' + ToString(XPHR);
+  writeln([L1, L2, L3]);
+  smartImage.drawTextLines([L1, L2, L3], Point(592, 517), statChars, False, clYellow);
+end;
+
+
+procedure checkForImages(path, link, item: string);
+{------------------------------------------------------------------------------)
+  Info: Downloads a file from the web and saves on computer. Made by Kevin.
+(------------------------------------------------------------------------------}
+var
+  progFile: longInt;
+  picName: string;
+begin
+
+  picName := AppPath + path;
+
+  try
+    if not fileExists(picName) then
+    begin
+      writeLn('      "     : ' + item + ' does not exist - Downloading it now!');
+      progFile := createFile(picName);
+    end else
+    begin
+      writeLn('      "     : ' + item + ' already exists');
+      exit;
+    end;
+
+    closeFile(progFile);
+
+    progFile := rewriteFile(picName, false);
+    writeFileString(progFile, getPage(link));
+    writeLn('      "     : ' + item + ' has been download to Simba folder!');
+    writeLn('');
+  finally
+    if (progFile > 0) then
+      closeFile(progFile);
+  end;
+
+end;
+
+
+procedure TDiv.init(whichDivLoc: Integer);
+begin
+  case whichDivLoc of
+    wispsNull:
+      begin
+        writeln('Please fill out setup (Lines XX - XX)');
+        TerminateScript;
+      end;
+    wispsPale:
+      with self do
+      begin
+      end;
+    wispsFlickering:
+      with self do
+      begin
+      end;
+    wispsBright:
+      with self do
+      begin
+      end;
+    wispsGlowing:
+      begin
+        with self do
+        begin
+          wispName := 'lowing';
+          mapName := 'glowing_wisps';
+          imgurURL := 'http://i.imgur.com/xhA0nmR.png';
+          color := 15121988;
+          tolerance := 23;
+          hueMod := 0.23;
+          satMod := 1.03;
+          enrichedColor := 16639344;
+          enrichedTolerance := 5;
+          enrichedHueMod := 0.26;
+          enrichedSatMod := 0.25;
+          siphonLoc := Point(230, 130);
+          riftLoc := Point(208, 189);
+          menuOption := self.wispName;
+        end;
+        with riftDiv do
+        begin
+          wispName := 'Convert memories';
+          color := 6225811;
+          tolerance := 9;
+          hueMod := 0.30;
+          satMod := 0.00;
+          case Players[0].integers[riftOption] of
+            toEnergy: menuOption := 'to energy';
+            toExp: menuOption := 'to experience';
+            toBonusExp: menuOption := 'to enhanc';
+          end;
+        end;
+      end;
+    wispsSparkling:
+      begin
+        with self do
+        begin
+          wispName := 'parkling';
+          mapName := 'sparkling_wisps';
+          imgurURL := 'http://i.imgur.com/OixbmCE.png';
+          color := 12691048;
+          tolerance := 24;
+          hueMod := 0.15;
+          satMod := 1.09;
+          enrichedColor := 15258754;
+          enrichedTolerance := 12;
+          enrichedHueMod := 0.22;
+          enrichedSatMod := 2.59;
+          siphonLoc := Point(140, 208);
+          riftLoc := Point(145, 176);
+          menuOption := self.wispName;
+        end;
+        with riftDiv do
+        begin
+          wispName := 'Convert memories';
+          color := 6617013;
+          tolerance := 6;
+          hueMod := 0.27;
+          satMod := 1.64;
+          case Players[0].integers[riftOption] of
+            toEnergy: menuOption := 'to energy';
+            toExp: menuOption := 'to experience';
+            toBonusExp: menuOption := 'to enhanc';
+          end;
+        end;
+      end;
+    wispsGleaming:
+      with self do
+      begin
+      end;
+    wispsVibrant:
+      with self do
+      begin
+      end;
+    wispsLustrous:
+      with self do
+      begin
+      end;
+    wispsElder:
+      with self do
+      begin
+      end;
+    wispsBrilliant:
+      begin
+        with self do
+        begin
+          wispName := 'rilliant';
+          mapName := 'brilliant_wisps';
+          imgurURL := 'http://i.imgur.com/ZsgzEqw.png';
+          color := 11904621;
+          tolerance := 24;
+          hueMod := 0.22;
+          satMod := 0.85;
+          siphonLoc := Point(65, 96);
+          riftLoc := Point(98, 127);
+          menuOption := self.wispName;
+        end;
+        with riftDiv do
+        begin
+          wispName := 'Convert memories';
+          color := 5961404;
+          tolerance := 8;
+          hueMod := 0.46;
+          satMod := 1.33;
+          case Players[0].integers[riftOption] of
+            toEnergy: menuOption := 'to energy';
+            toExp: menuOption := 'to experience';
+            toBonusExp: menuOption := 'to enhanc';
+          end;
+        end;
+      end;
+    wispsRadiant:
+      begin
+        with self do
+        begin
+          wispName := 'adiant';
+          mapName := 'radiant_wisps';
+          imgurURL := 'http://i.imgur.com/OpQJUnB.png';
+          color := 10785888;
+          tolerance := 16;
+          hueMod := 0.08;
+          satMod := 0.62;
+          enrichedColor := 16379032;
+          enrichedTolerance := 8;
+          enrichedHueMod := 0.28;
+          enrichedSatMod := 1.38;
+          siphonLoc := Point(173, 117);
+          riftLoc := Point(137, 134);
+          menuOption := self.wispName;
+        end;
+        with riftDiv do
+        begin
+          wispName := 'Convert memories';
+          color := 5961404;
+          tolerance := 8;
+          hueMod := 0.46;
+          satMod := 1.33;
+          case Players[0].integers[riftOption] of
+            toEnergy: menuOption := 'to energy';
+            toExp: menuOption := 'to experience';
+            toBonusExp: menuOption := 'to enhanc';
+          end;
+        end;
+      end;
+    wispsLuminous:
+      begin
+        with self do
+        begin
+          wispName := 'uminous';
+          mapName := 'luminous_wisps';
+          imgurURL := 'http://i.imgur.com/mFT7egr.png';
+          color := 12302168;
+          tolerance := 17;
+          hueMod := 0.21;
+          satMod := 0.67;
+          enrichedColor := 14675914;
+          enrichedTolerance := 9;
+          enrichedHueMod := 0.69;
+          enrichedSatMod := 1.98;
+          siphonLoc := Point(130, 108);
+          riftLoc := Point(181, 142);
+          menuOption := self.wispName;
+        end;
+        with riftDiv do
+        begin
+          wispName := 'Convert memories';
+          color := 7731672;
+          tolerance := 8;
+          hueMod := 0.32;
+          satMod := 0.22;
+          case Players[0].integers[riftOption] of
+            toEnergy: menuOption := 'to energy';
+            toExp: menuOption := 'to experience';
+            toBonusExp: menuOption := 'to enhanc';
+          end;
+        end;
+      end;
+    wispsIncandescent:
+      begin
+        with self do
+        begin
+          wispName := 'ncandescent';
+          mapName := 'incandescent_wisps';
+          imgurURL := 'http://i.imgur.com/2dpR74S.png';
+          color := 11838064;
+          tolerance := 11;
+          hueMod := 0.08;
+          satMod := 1.24;
+          enrichedColor := 16048795;
+          enrichedTolerance := 8;
+          enrichedHueMod := 0.21;
+          enrichedSatMod := 2.48;
+          siphonLoc := Point(220, 107);
+          riftLoc := Point(187, 150);
+          menuOption := self.wispName;
+        end;
+        with riftDiv do
+        begin
+          wispName := 'Convert memories';
+          color := 5961404;
+          tolerance := 8;
+          hueMod := 0.46;
+          satMod := 1.33;
+          case Players[0].integers[riftOption] of
+            toEnergy: menuOption := 'to energy';
+            toExp: menuOption := 'to experience';
+            toBonusExp: menuOption := 'to enhanc';
+          end;
+        end;
+      end;
+    wispsCache:
+      with self do
+      begin
+        wispName := 'Convert memories';
+        color := 14351230;
+        tolerance := 8;
+        hueMod := 0.50;
+        satMod := 0.69;
+        case Players[0].integers[riftOption] of
+          toEnergy: menuOption := 'to energy';
+          toExp: menuOption := 'to experience';
+          toBonusExp: menuOption := 'to enhanc';
+        end;
+      end;
+  end;
+end;
+
+
+function TPlayer.init: Boolean;
+begin
+  cDiv.init(self.integers[divLocation]);
+  if not(self.login) then
+    Exit(False);
+  minimap.clickCompass;
+  mainscreen.setAngle(MS_ANGLE_HIGH);
+  mouseBox(mainscreen.getBounds, MOUSE_MOVE);
+  exitTreasure;
+  if self.integers[initialExp] = -1 then
+    self.integers[initialExp] := chatbox.getXPBar;
+  if not(self.booleans[timerStarted]) then
+  begin
+    progressTimer.start;
+    self.booleans[timerStarted] := True;
+  end;
+  if not(self.booleans[breakTimerStarted]) then
+  begin
+    self.integers[nextBreak] := progressTimer.getTime + RandomRange(self.integers[minPlayTime], self.integers[maxPlayTime]) * 60000;
+    self.booleans[breakTimerStarted] := True;
+  end;
+  result := isLoggedIn;
+end;
+
+
+procedure TPlayer.handleBreaks;
+var
+  breakTimer: TTimeMarker;
+  ETA, h, m, s, w: Integer;
+begin
+  if progressTimer.getTime > self.integers[nextBreak] then
+  begin
+    progressTimer.pause;
+    self.logout;
+    breakTimer.start;
+    self.integers[breakDuration] := breakTimer.getTime + RandomRange(self.integers[minBreakTime], self.integers[maxBreakTime]) * 60000;
+    while breakTimer.getTime < self.integers[breakDuration] do
+    begin
+      wait(1000);
+      ETA := self.integers[breakDuration] - breakTimer.getTime;
+      convertTime(ETA, h, m, s);
+      smartImage.clearArea(mainscreen.getBounds);
+      smartImage.drawTextLines(['Taking a Break', 'Time Before Resuming: ' + ToString(h) + ' Hours, ' + ToString(m) + ' Minutes, ' + ToString(s) + ' Seconds'], Point(10,10), statChars, False, clYellow);
+    end;
+    if not(self.init) then
+    begin
+      writeln('Failed to init player. Terminating.');
+      TerminateScript;
+    end;
+    progressTimer.start;
+    self.integers[nextBreak] := progressTimer.getTime + RandomRange(self.integers[minPlayTime], self.integers[maxPlayTime]) * 60000;
+  end;
+  ETA := self.integers[nextBreak] - progressTimer.getTime;
+  convertTime(ETA, h, m, s);
+  //writeln('Time Before Break: ' + ToString(h) + ' Hours, ' + ToString(m) + ' Minutes, ' + ToString(s) + ' Seconds');
+  w := smartImage.getWidth;
+  smartImage.clearArea(IntToBox(592,555, w-1,569));
+  smartImage.drawText('Time Before Break: ' + ToString(h) + ' H, ' + ToString(m) + ' M, ' + ToString(s) + ' S', Point(592, 555), statChars, False, clYellow);
+  smartImage.clearArea(mainscreen.getBounds);
+end;
+
+
+function actionState: Integer;
+var
+  bagFull: Boolean;
+begin
+  Result := -1;
+  bagFull := tabBackpack.isFull;
+  case bagFull of
+    True: if distance(sps.getPlayerPos, cDiv.riftLoc) <= 23 then Exit(stateDepositMemories) else Exit(stateToRift);
+    False: if distance(sps.getPlayerPos, cDiv.riftLoc) <= 16 then Exit(stateToWisps) else Exit(stateSiphon);
+  end;
+end;
+
+
+function TDiv.siphonWisp: Integer;
+var
+  i: Integer;
+  p: TPoint;
+begin
+  if not(self.getPoint(p)) then Exit(resultNoWisps);
+  mouseSpeed := 30;
+  Mouse(p.rand(RandomRange(-8, 8)), MOUSE_MOVE);
+  mouseSpeed := 20;
+  if isMouseOverText([self.wispName], 100) then
+  begin
+    GetMousePos(p.x, p.y);
+    Mouse(p, MOUSE_RIGHT);
+    if chooseOption.select([self.menuOption]) then Result := resultSuccess else Result := resultWispMoved;
+    minimap.waitFlag;
+  end;
+  if Result = resultSuccess then
+    waitWhileSiphon;
+  smartImage.clearArea(mainscreen.getBounds);
+end;
+
+
+function TRSMinimap.isPlayerMoving(shiftInterval: integer = 500): boolean; override;
+var
+  pos1, pos2: TPoint;
+  t: Integer;
+begin
+  pos1 := sps.getPlayerPos;
+  t := GetSystemTime + shiftInterval;
+  while (GetSystemTime < t) do
+  begin
+    pos2 := sps.getPlayerPos;
+    if (pos1.x <> pos2.x) or (pos1.y <> pos2.y) then Exit(True);
+  end;
+end;
+
+
+function TRSMinimap.waitPlayerMoving(shiftInterval: integer = 500; maxTime: integer = 20000): boolean; override;
+var
+  t: LongWord;
+  tempRift: TRift;
+  pos: TPoint;
+begin
+  result := false;
+  t := (getSystemTime() + maxTime);
+
+  print('Waiting while the player is moving...', TDebug.SUB);
+
+  while (getSystemTime() < t) do
+  begin
+    wait(randomRange(10, 20));
+
+    if (actionState = stateToRift) or (actionState = stateDepositMemories) then
+    begin
+      pos := sps.getPlayerPos;
+      if distance(pos, cDiv.riftLoc) < 20 then
+        if tempRift.depositMemories_Predict = 1 then
+          Exit(True);
+    end;
+
+    if (not self.isPlayerMoving(shiftInterval)) then
+      exit(true);
+  end;
+end;
+
+
+function TSPSArea.walkPath(path: TPointArray; waitMoving: Boolean = True; shiftInterval: Integer = 500): boolean; override;
+var
+  p, lastPos, mmPoint: TPoint;
+  t, fails, h, l, i: integer;
+begin
+  result := false;;
+
+  h := high(path);
+  l := low(path);
+
+  t := (getSystemTime() + randomRange(15000, 20000));
+
+  repeat
+    if (not isLoggedIn()) then
+      exit(false);
+
+    p := self.getPlayerPos();
+
+    for i := h downto l do
+      if (SPS_PosToMM(path[i], p, mmPoint)) then
+      begin
+        if (distance(minimap.getCenterPoint(), mmPoint) >= 10) then
+        begin
+          if (spsMultiMouse) then
+            multiClick(mmPoint, 25, 3)
+          else
+            mouse(mmPoint, MOUSE_LEFT);
+
+          if (minimap.isFlagPresent(100 + random(50))) then
+            if minimap.waitPlayerMoving then Exit(True);
+        end;
+
+        t := (getSystemTime() + randomRange(15000, 20000));
+
+        result := (i = h) or (distance(path[i], path[h]) < 18);
+
+        if (result) then
+          break(2)
+        else
+          break();
+
+      end;
+
+    if (p.x = lastPos.x) and (p.y = lastPos.y) then
+      inc(fails);
+
+    lastPos := p;
+
+  until (getSystemTime() > t) or (fails > 5);
+
+  if (minimap.isFlagPresent()) or (minimap.isPlayerMoving()) then
+    minimap.waitPlayerMoving();
+
+  print(self.getName()+'.walkPath(): result = '+boolToStr(result));
+end;
+
+
+function TRSMinimap.walkToYellowDots: Boolean;
+var
+  TPA: TPointArray;
+  ATPA: T2DPointArray;
+  p: TPoint;
+begin
+  if not findColorsTolerance(TPA, 917247, self.getBounds, 10) then
+    Exit;
+  ATPA := ClusterTPA(TPA, 20);
+  SortATPASize(ATPA, True);
+  smartImage.clearArea(minimap.getBounds);
+  smartImage.debugATPA(ATPA);
+  mouse(ATPA[0].getMiddle, mouse_Left);
+  result := self.waitPlayerMoving;
+end;
+
+
+var
+  failCount: Integer;
+
+
+procedure mainLoop;
+var
+  timeOutTimer: TTimeMarker;
+  currentState: Integer;
+begin
+  Report;
+  Players[0].handleBreaks;
+  if not(isLoggedIn) then
+    if not(Players[0].init) then
+    begin
+      writeln('failed to init player');
+      TerminateScript;
+    end;
+  currentState := actionState;
+  case currentState of
+    stateSiphon:
+      begin
+        timeOutTimer.start;
+        while timeOutTimer.getTime < 3000 do
+          if cDiv.siphonWisp = 1 then Exit else wait(RandomRange(100, 200));
+        inc(failCount);
+      end;
+    stateToRift:
+      begin
+        timeOutTimer.start;
+        while timeOutTimer.getTime < 800 do
+          case riftDiv.siphonWisp of
+            resultNoWisps:
+              begin
+                sps.blindWalk(cDiv.riftLoc);
+                Exit;
+              end;
+            resultWispMoved: Wait(randomRange(100,200));
+            resultSuccess: Exit;
+          end;
+        inc(failCount);
+      end;
+    stateDepositMemories:
+      begin
+        timeOutTimer.start;
+        while (timeOutTimer.getTime < 3000) do
+          if riftDiv.siphonWisp then Break else Wait(randomRange(100, 200));
+        inc(failCount);
+      end;
+    stateToWisps:
+      begin
+        timeOutTimer.start;
+        while timeOutTimer.getTime < 800 do
+          case cDiv.siphonWisp of
+            resultNoWisps:
+              begin
+                sps.blindWalk(cDiv.siphonLoc);
+                Exit;
+              end;
+            resultWispMoved: Wait(randomRange(100,200));
+            resultSuccess: Exit
+          end
+        inc(failCount);
+      end;
+  end;
+  if failCount >= 5 then
+  begin
+    writeln('failed too many times, trying backup procedures');
+    currentState := actionState;
+    case currentState of
+      stateSiphon: if sps.blindWalk(cDiv.siphonLoc) then failCount := 0;
+      stateDepositMemories: if cacheDiv.siphonWisp = resultSuccess then failCount := 0;
+      stateToRift:
+        if (players[0].integers[divLocation] <> wispsRadiant) then
+        begin
+          if sps.blindWalk(cDiv.riftLoc) then failCount := 0;
+        end else
+        begin
+          MouseBox(mainscreen.getBounds, mouse_Right);
+          options.selectOption(['alk']);
+        end;
+    end;
+    if (failCount >= 10) then if minimap.walkToYellowDots then failCount := 0;
+  end;
+end;
+
+
+{$IFDEF TESTMODE}
+procedure testProc;
+var
+  pos: TPoint;
+  d: Integer;
+begin
+  minimap.walkToYellowDots;
+  Wait(500);
+  smartImage.clear;
+end;
+{$ENDIF}
+
+
+begin
+  smartEnableDrawing := True;
+  disableSRLDebug := False;
+  setupSRL;
+  DeclarePlayers;
+  cacheDiv.init(wispsCache);
+  if not(Players[0].init) then
+  begin
+    writeln('Failed to init player. Terminating.');
+    TerminateScript;
+  end;
+  players[0].integers[initialExp] := chatbox.getXPBar;
+  checkForImages('Includes/SPS/img/runescape_other/' + cDiv.mapName + '.png', cDiv.imgurURL, 'SPS Map');
+  sps.setup(cDiv.mapName, RUNESCAPE_OTHER);
+
+  {$IFNDEF TESTMODE}
+  while(True) do mainLoop;
+  {$ELSE}
+  while(True) do testProc;
+  {$ENDIF}
+end.

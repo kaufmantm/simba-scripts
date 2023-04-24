@@ -1,0 +1,570 @@
+program BarbFisher;
+{$DEFINE SMART}
+{$I SRL-6/SRL.simba}
+{$I SPS/LIB/SPS-RS3.simba}
+//{$DEFINE COLORTEST}
+
+
+procedure DeclarePlayers;
+begin
+  currentPlayer := 0;
+  setLength(players, 1);
+
+  with players[0] do
+  begin
+    loginName := '';
+    password := '';
+    isActive := True;
+    world := 85; //world
+    integers[0] := 480; //min time (mins) before break
+    integers[1] := 60;  //random time to add to playtime before break
+    integers[2] := 420; //min break time (mins)
+    integers[3] := 60; //random time to add to break time
+  end;
+end;
+
+
+const
+  TroutSlot = 1;
+  TroutKey = VK_1;
+  SalmonSlot := 2;
+  SalmonKey = VK_2;
+  SturgeonSlot = 3;
+  SturgeonKey = VK_3;
+
+
+const
+  FISH_TROUT = 0;
+  FISH_SALMON = 1;
+  FISH_STURGEON = 2;
+
+
+type
+  TFish = record
+    FishType, Color, ActionBarSlot: Integer;
+    Key: UInt16;
+  end;
+  TFishArray = Array of TFish;
+
+
+var
+  Fish: TFishArray;
+  T: TTimeMarker;
+  PathFromBottom, PathFromTop: TPointArray;
+
+
+procedure SetupFish;
+begin
+  setLength(Fish, 3);
+  with Fish[FISH_TROUT] do
+  begin
+    FishType := FISH_TROUT;
+    Color := 7377555;
+    ActionBarSlot := TroutSlot;
+    Key := TroutKey;
+  end;
+  with Fish[FISH_SALMON] do
+  begin
+    FishType := FISH_SALMON;
+    Color := 5855847;
+    ActionBarSlot := SalmonSlot;
+    Key := SalmonKey;
+  end;
+  with Fish[FISH_STURGEON] do
+  begin
+    FishType := FISH_STURGEON;
+    Color := 4144682;
+    ActionBarSlot := SturgeonSlot;
+    Key := SturgeonKey;
+  end;
+end;
+
+
+function TRSChatBox.getXP(): integer;
+{------------------------------------------------------------------------------)
+  Info: Returns XP from the XP bar in the chatbox. Made by Ashaman88.
+(------------------------------------------------------------------------------}
+var
+  b: TBox;
+  s: String;
+  tpa : TPointArray;
+  atpa : T2DPointArray;
+  i,p: Integer;
+begin
+  B := self.getBounds();
+  B.edit(+(b.x2-b.x1)-140, +10, -5, -94);
+
+  findColorsTolerance(TPA, 14013909, b, 4, colorSetting(2, 0.00, 0.00));
+
+  if length(TPA) < 2 then
+  begin
+    writeLn('chatBox.getXP(): No XP found!');
+    exit;
+  end;
+
+  ATPA := tpa.cluster(5);
+
+  B := atpa.getbounds();
+  B.edit(-2, -2, +2, +3);
+  S := replace(tesseractgettext(B.x1, B.y1, B.x2, B.y2, FILTER_SMALL_CHARS), ' ', '', [rfReplaceAll]);
+  P := pos('x', S);
+
+  if P > 0 then
+    result := strToIntDef(extractFromStr(copy(S, P, length(S)), numbers), 0)
+  else
+    result := strToIntDef(extractFromStr(S, numbers), 0);
+
+  //writeLn('chatBox.getXP(): XP found: ' + toStr(result));
+end;
+
+
+//FIX: FALSE POSTIVES ON COLOR
+function FishingSpot(Bounds: TBox) : T2DPointArray;
+var
+  arP, arAP: TPointArray;
+  arC, arUC: TIntegerArray;
+  ararP: T2DPointArray;
+  tmpCTS, i, j, arL, arL2: Integer;
+  P: TPoint;
+  X, Y, Z: Extended;
+begin
+  tmpCTS := GetToleranceSpeed;
+  SetColorToleranceSpeed(2);
+  SetToleranceSpeed2Modifiers(0.05, 0.35);
+  {$IFNDEF COLORTEST}
+  FindColorsTolerance(arP, 11246222, Bounds, 15);
+  {$ELSE}
+  FindColorsTolerance(arP, 11246222, Bounds, 15);
+  {$ENDIF}
+  SetColorToleranceSpeed(tmpCTS);
+  SetToleranceSpeed2Modifiers(0.2, 0.2);
+  if (High(arP)<0) then Exit;
+
+  arC := GetColors(arP);
+  arUC := arC;
+  ClearSameIntegers(arUC);
+  arL := High(arUC);
+  arL2 := High(arC);
+
+  for i := 0 to arL do
+  begin
+    ColorToXYZ(arC[i], X, Y, Z);
+    //Yes I used ACA. Come at me
+    if (X >= 12.51) and (X <= 56.88) and (Y >= 13.03) and (Y <= 60.32) and (Z >= 22.96) and (Z <= 72.95) then
+    begin
+      for j := 0 to arL2 do
+      begin
+        if (arUC[i] = arC[j]) then
+        begin
+          SetLength(arAP, Length(arAP) + 1);
+          arAP[High(arAP)] := arP[j];
+        end;
+      end;
+    end;
+  end;
+  Result := arAP.split(10,10);
+  Result.filterBetween(0,5);
+  Result.sortFromMidPoint(Bounds.getMiddle);
+  SmartImage.clearArea(mainscreen.getBounds);
+  smartImage.drawBox(Bounds, False, clred);
+  SmartImage.debugATPA(Result);
+end;
+
+
+function IsSpotActive: Boolean;
+var
+  ATPA: T2DPointArray;
+  B: TBox;
+  SpotTimer: TTimeMarker;
+begin
+  B := IntToBox(305, 199, 324, 215);
+  SpotTimer.reset;
+  SpotTimer.start;
+  minimap.setAngle(MM_DIRECTION_NORTH);
+  repeat
+    ATPA := FishingSpot(B);
+    Result := (High(ATPA) >= 0);
+    wait(25);
+  until((Result) or (SpotTimer.getTime > 1000));
+end;
+
+
+function ClickSpot: Boolean;
+var
+  ATPA: T2DPointArray;
+  i: Integer;
+  P: TPoint;
+begin
+  ATPA := FishingSpot(IntToBox(245,0,350,388));
+  if High(ATPA) = -1 then
+  begin
+    print('Func FishingSpot returned null array, Exiting Func ClickSpot', TDebug.DEBUG);
+    Exit;
+  end;
+  for i := 0 to High(ATPA) do
+  begin
+    P := ATPA[i].getMiddle;
+    Mouse(P.rand(RandomRange(-20, 20)), MOUSE_MOVE);
+    if isMouseOverText(['Use-rod', 'Fishing', 'spot'], 100) then
+    begin
+      GetMousePos(P.x, P.y);
+      Mouse(P, MOUSE_LEFT);
+      minimap.waitFlag;
+      Result := True; //waitFunc(@isChopping, 20, 2000);
+    end;
+    if (Result) then
+    begin
+      smartImage.clearArea(mainscreen.getBounds);
+      Break;
+    end;
+  end;
+  smartImage.clearArea(mainscreen.getBounds);
+end;
+
+
+function TFishArray.contains(which: TFish): Boolean;
+var
+  i: Integer;
+begin
+  for i := 0 to High(self) do
+    if (self[i].FishType = Which.FishType) then
+      Exit(True);
+end;
+
+
+function TFish.OnBar: Boolean;
+var
+  B: TBox;
+  P: TPoint;
+begin
+  B := actionBar.getSlotBox(self.ActionBarSlot);
+  Result := FindColorTolerance(P.x, P.y, self.Color, B, 20);
+end;
+
+
+procedure DropFish;
+var
+  i: Integer;
+  B: TBox;
+  P: TPoint;
+  TimeOut: TTimeMarker;
+begin
+  for i := 0 to 2 do
+    if (Fish[i].OnBar) then
+      KeyDown(Fish[i].Key);
+  TimeOut.reset;
+  TimeOut.start;
+  repeat
+    wait(50);
+    for i := 0 to 2 do
+      if isKeyDown(Fish[i].Key) then
+        if not(Fish[i].OnBar) then
+          KeyUp(Fish[i].Key);
+  until((TimeOut.getTime > 4500 + gaussRangeInt(0,1000)) or (not(Fish[0].OnBar) and not(Fish[1].OnBar) and not(Fish[2].OnBar)));
+  for i := 0 to 2 do
+    KeyUp(Fish[i].Key);
+  if (tabBackpack.isFull) then
+  begin
+    print('Backpack is full. Terminating.', TDebug.DEBUG);
+    TerminateScript;
+  end;
+end;
+
+
+//Credits to rlagkgud
+procedure CheckLocation;
+var
+  pos: TPoint;
+begin
+  pos := SPS.getPlayerPos();
+
+  if pos.y > 220 then
+  begin
+    SPS.walkPath(PathFromBottom);
+    minimap.waitPlayerMoving();
+    exit;
+  end;
+
+  if pos.y < 120 then
+  begin
+    SPS.walkPath(PathFromTop);
+    minimap.waitPlayerMoving();
+    exit;
+  end;
+
+
+end;
+
+
+var
+  AB: TTimeMarker; //Antiban time marker
+  NextAB: Integer; //when to do next antiban
+
+
+//ashaman88
+//modded for timing + personilization
+Procedure Antiban;
+Var
+  I, ABMin, ETA, h, m, s: Integer;
+Begin
+  if ((AB.time = -1) or (AB.getTime > NextAB)) then
+  begin
+    I := Random(600);
+    Case I Of
+      1..7:
+        Begin
+          hoverSkill(SKILL_FISHING);
+          Wait(GaussRangeInt(1000,10000));
+          TabBackpack.Open;
+        End;
+      8..20: mouseMovingObject;
+      21..100: SleepAndMoveMouse(GaussRangeInt(100,1500));
+      101..400:
+        Begin
+          MouseOffClient(Random(4));
+          Wait(GaussRangeInt(0, 2000));
+        End;
+    End;
+    AB.reset; AB.start;
+    NextAB := AB.getTime + 6000 + gaussRangeInt(2000, 6000);
+  end;
+  minimap.setAngle(MM_DIRECTION_NORTH);
+  ETA := NextAB - AB.getTime;
+End;
+
+
+procedure Report;
+var
+  XP, XPHR, h, m, s, W: Integer;
+  L1, L2, L3: string;
+begin
+  w := smartImage.getWidth;
+  smartImage.clearArea(IntToBox(592,517, w-1,555));
+  XP := chatbox.getXP - Players[0].integers[99];
+  ConvertTime(T.getTime, h, m, s);
+  XPHR := Round(XP * 1000.0 * (3600.0 / (T.getTime+1)));
+  L1 := 'Worked: ' + ToString(h) + ' H, ' + ToString(m) + ' M, ' + ToString(s) + ' S';
+  L2 := 'XP: ' + ToString(XP);
+  L3 := 'XP/HR: ' + ToString(XPHR);
+  writeln([L1, L2, L3]);
+  smartImage.drawTextLines([L1, L2, L3], Point(592, 517), statChars, False, clYellow);
+end;
+
+
+var
+  TStarted, BStarted: Boolean;
+
+
+function SetupPlayer: Boolean;
+begin
+  if not(Players[0].isActive and Players[0].login) then
+    Exit
+  else
+    Result := isLoggedIn;
+  minimap.clickCompass;
+  mainscreen.setAngle(MS_ANGLE_HIGH);
+  mouseBox(mainscreen.getBounds, MOUSE_MOVE);
+  exitTreasure;
+  Wait(RandomRange(2000,4000));
+  if (Players[0].integers[99] < 0) then
+    Players[0].integers[99] := chatbox.getXP;
+  if not(TStarted) then
+  begin
+    TStarted := True;
+    T.start;
+  end;
+  if not(BStarted) then
+  begin
+    Players[0].integers[4] := T.getTime + (Players[0].integers[0] + Random(Players[0].integers[1])) * 60000;
+    BStarted := True;
+  end;
+end;
+
+
+procedure HandleBreaks;
+var
+  BreakTimer: TTimeMarker;
+  ETA, h, m, s, W: Integer;
+begin
+  if (T.getTime > Players[0].integers[4]) then
+  begin
+    writeln('Time To Take A Break');
+    T.pause;
+    Players[currentPlayer].logout;
+    BreakTimer.start;
+    Players[0].integers[5] := BreakTimer.getTime + (Players[0].integers[2] + Random(Players[0].integers[3]))*60000;
+    while BreakTimer.getTime < Players[0].integers[5] do
+    begin
+      wait(1000);
+      ETA := Players[0].integers[5] - BreakTimer.getTime;
+      convertTime(ETA, h, m, s);
+      smartImage.clearArea(mainscreen.getBounds);
+      smartImage.drawTextLines(['Taking a Break', 'Time Before Resuming: ' + ToString(h) + ' Hours, ' + ToString(m) + ' Minutes, ' + ToString(s) + ' Seconds'], Point(10,10), statChars, False, clYellow);
+      writeln('Time Before Resuming: ' + ToString(h) + ' Hours, ' + ToString(m) + ' Minutes, ' + ToString(s) + ' Seconds');
+    end;
+    if not(setupPlayer) then
+    begin
+      print('UNABLE TO SET UP FIRST PLAYER', TDebug.FATAL);
+      terminateScript;
+    end;
+    T.start;
+    Players[0].integers[4] := T.getTime + (Players[0].integers[0] + Random(Players[0].integers[1])) * 60000;
+  end;
+  ETA := Players[0].integers[4] - T.getTime;
+  convertTime(ETA, h, m, s);
+  writeln('Time Before Break: ' + ToString(h) + ' Hours, ' + ToString(m) + ' Minutes, ' + ToString(s) + ' Seconds');
+  w := smartImage.getWidth;
+  smartImage.clearArea(IntToBox(592,555, w-1,569));
+  smartImage.drawText('Time Before Break: ' + ToString(h) + ' H, ' + ToString(m) + ' M, ' + ToString(s) + ' S', Point(592, 555), statChars, False, clYellow);
+  smartImage.clearArea(mainscreen.getBounds);
+end;
+
+
+procedure WaitFish;
+var
+  LastXP, TimeOut: TTimeMarker;
+  PrevXP, CurrXP: Integer;
+begin
+  TimeOut.start;
+  LastXP.start;
+  PrevXP := chatbox.getXP;
+  repeat
+    CurrXP := chatbox.getXP;
+    if (CurrXP > PrevXP) then
+    begin
+      LastXP.reset; LastXP.start;
+      PrevXP := CurrXP;
+    end;
+    if (LastXP.getTime+1>15000) then
+      Exit;
+    LastXP.Pause; AntiBan; LastXP.start;
+    if (tabBackpack.count >= 12) then
+      DropFish;
+    if not(IsSpotActive) then
+    begin
+      writeln('SPOT NO ACTIVERINO');
+      Exit;
+    end else
+      writeln('SPOT ACTIVE');
+    if ConversationBox.isOpen then
+    begin
+      Writeln('You have run out of bait or your inventory is full. Check for improper hotkey setup or lack of bait.');
+      TerminateScript;
+    end;
+  until(not(IsSpotActive) or LastXP.getTime > 15000 or TimeOut.getTime > 270000);
+end;
+
+
+procedure MainLoop;
+var
+  Timer: TTimeMarker;
+  pos: TPoint;
+begin
+  CheckLocation;
+  HandleBreaks;
+  if not(isLoggedIn) then setupPlayer;
+  Report;
+  Timer.start;
+  repeat
+    if ClickSpot then break else Wait(RandomRange(4000, 6000));
+  until(Timer.getTime>20000);
+  {if (Timer.getTime>20000) then
+  begin
+    pos := sps.getPlayerPos;
+    if (pos.y <=182) then
+      sps.walkToPos(Point(138, 210 + 4 * Random(1)), pos);
+    if (pos.y >= 210) then
+      sps.walkToPos(Point(114, 130 + 4 * Random(3)), pos);
+    Exit;
+  end;   }
+  waitFish;
+end;
+
+
+procedure checkForImages(path, link, item: string);
+{------------------------------------------------------------------------------)
+  Info: Downloads a file from the web and saves on computer. Made by Kevin.
+(------------------------------------------------------------------------------}
+var
+  progFile: longInt;
+  picName: string;
+begin
+
+  picName := AppPath + path;
+
+  try
+    if not fileExists(picName) then
+    begin
+      writeLn('      "     : ' + item + ' does not exist - Downloading it now!');
+      progFile := createFile(picName);
+    end else
+    begin
+      writeLn('      "     : ' + item + ' already exists');
+      exit;
+    end;
+
+    closeFile(progFile);
+
+    progFile := rewriteFile(picName, false);
+    writeFileString(progFile, getPage(link));
+    writeLn('      "     : ' + item + ' has been download to Simba folder!');
+    writeLn('');
+  finally
+    if (progFile > 0) then
+      closeFile(progFile);
+  end;
+
+end;
+
+
+//Thanks again to Rlagkgud
+procedure SetupSPS;
+begin
+  checkForImages('Includes/SPS/img/runescape_other/fishmap.png', 'http://oi57.tinypic.com/10pnhxv.jpg', 'SPS map');
+  PathFromBottom := [Point(120, 173), Point(125, 148)];
+  PathFromTop := [Point(127, 112), Point(125, 150)];
+  sps.setup('fishmap', RUNESCAPE_OTHER, 4, 600.0, 0.40);
+  spsAnyAngle := true;
+end;
+
+
+{$IFDEF COLORTEST}
+procedure ColorTest;
+var
+  ATPA: T2DPointArray;
+  pos: TPoint;
+begin
+  repeat
+    //ATPA := FishingSpot(IntToBox(245,0,350,388));
+    //smartImage.debugATPA(ATPA);
+    //pos := sps.getPlayerPos;
+    //smartImage.drawText(ToString(pos), Point(10,10), statChars, False, clYellow);
+    Wait(600);
+    writeln(IsSpotActive);
+  until(False);
+end;
+{$ENDIF}
+
+
+begin
+  smartEnableDrawing := True;
+  DeclarePlayers;
+  SetupSRL;
+  SetupSPS;
+  Players[0].integers[99] := -1;
+  disableSRLDebug := True;
+  SetupFish;
+
+  if not(setupPlayer) then
+  begin
+    print('Failed to setup player, Terminating', TDebug.FATAL);
+    terminateScript;
+  end;
+  {$IFDEF COLORTEST}
+  ColorTest;
+  {$ELSE}
+  DropFish;
+
+  while (players.getActive > 0) do mainLoop;
+  {$ENDIF}
+end.

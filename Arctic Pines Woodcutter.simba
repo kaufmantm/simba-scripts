@@ -1,0 +1,384 @@
+program wc;
+{$DEFINE SMART}
+{$I SRL-6/SRL.simba}
+
+
+procedure DeclarePlayers;
+begin
+  currentPlayer := 0;
+  setLength(players, 1);
+
+  with players[0] do
+  begin
+    loginName := '';
+    password := '';
+    isActive := True;
+    world := -1; //world
+    booleans[0] := True;//Using inferno adze? effects xp calculation
+    integers[0] := 360; //min time (mins) before break
+    integers[1] := 60;  //random time to add to playtime before break
+    integers[2] := 720; //min break time (mins)
+    integers[3] := 120; //random time to add to break time
+  end;
+end;
+
+
+var
+  T: TTimeMarker; //Timer
+
+
+//Searches for a preindexed array of colors, merges them into 1 TPA, splits into ATPA (size 35), sorts from center of screen
+function FindTrees: T2DPointArray;
+var
+  cols: TIntegerArray = [6914160,5334867,5203024,3887163,6584675,3360821,3953211,3755577,3492406,4742215,3689784,5400144,5466192,6913904,6979443,4018749,6255708,5861730,3558199,3492662,4413505,4084541,4939849,5531730,4216127,3887162,7045232,7308660,7176817,5071435,5795421,4939848,4742214,7045746,4808263,5729364,5137228,5597523,4742474,6847852,6124122,6518886,6716524,4808264,5927007,5203020,6518879,6849393,6190427,7243637,6849907,6584672,4676678,5729621,6058329,7178358,6913636,5005642,5137227,5071436,6716257,4939850,5598034,5531729,5465937,5006154,5466449,6058073,4084798,5137484,6979697,6783084,4808520,4545091,3623992,6782315,4874057,5137229,5269326,6979946,5531986,5334607,5269069,5994077,3755320,4940105,3887419,5926750,4019005,7440498,3623991,5137231,3887164,5137486,6717294,6782308,5795669,3492661,4808519,7243633,9939863,5597522,5335119,3426869,5993310,4479041,6518882,6718062,7111789,6980205,5400143,6785397,5663827,4150591,4348224,3623994,4347713,5268813,6522996,6716517,6848874,4809035,6718574,4742987,7047543,6653811,4019006,3624251,6849649,5796444,9019789,5993570,6718834,9019275,6785398,7178355,6457204,10136985,6058846,6190433,5927517,4742731,5598038,5203277,6782572,5861469,5203280,3558201,5927522,5993054,5796194,6058847,4216384,5336149,6519139,5598039,7176819,5927010,4742216,6980464,5268814,6848878,6915186,6980204,5467734,5071694,3558712,6058072,5005898,6716258,6716776,5598809,5203278,6782310,4150335,6058328,6322016,6915444,4281663,5861213,5861462,5927254,5466193,6848624,6783597,5795157,5861206,5466195,7046253,6387294,5400656,5664603,5992280,5268557,3821370,5992279,4676934,5005641,5334350,6719091,6849387,6785141,5531985,6979438,6848109,6190180,4018748,6847844,4742727,5466708,5334351,3492404,5730654,6847845,6716261,6255707,4347968,6783088,7046766,7243373,6914929,5862242,4216128,4742471,7243381,5137485,4150334,10136986,5992281,5268815,7178101,5465936,5137230,5466194,4874056,3361333,7111024,6979952,5729365,6058585,3821626,5664601,5071434,5663571,3361076,5795158,9677206,6782311,6913895,4742470,6588275,6190945,5465938,6652784,6652785,6915442,6784370,5927004,6982006,5334352,6256225,8953997,6587762,3952957,3821884,5927003,4281919,5993568,6058845,7374706,6980976,6124641,7505777,6783857,6588276,5993824,4413249,6584425,5269329,6124381,6717549,7308912,6256481,7374705,5861987,6716260,4084542,3952955,5400403,3426613,5400402,6850164,5860950,5926743,6848110,4018750,6914155,5071947,4874824,5203022,3755833,6979440,5334606,6913646,6849390,6781795,8953996,6387555,4018491,6848881,6849646,6848099,9874071,5203021,6719606,5730909,9808535,6650983,6916728,6980466,6979691,6653299,7112309,5862497];
+  i: Integer;
+  TPA: TPointArray;
+  ATPA: Array of TPointArray;
+  Bx: TBox;
+begin
+  setlength(ATPA, High(cols)+1);
+  for i := 0 to High(cols) do
+    findColorsSpiralTolerance(Bx.x1, Bx.x2, ATPA[i], cols[i], mainscreen.getBounds, 10);
+    //findColorsTolerance(ATPA[i], cols[i], mainscreen.getBounds, 10);
+  TPA := MergeATPA(ATPA);
+  Result := TPA.toATPA(35);
+  Result.sortFromMidPoint(mainscreen.getCenterPoint);
+  Result.filterBetween(0, 50);
+  smartImage.debugATPA(Result);
+end;
+
+
+//basically a wrapper for isPlayerAnimating since waitFunc can't take funcs with parameters
+function isChopping: Boolean;
+begin
+  Result := mainscreen.isPlayerAnimating();
+end;
+
+
+//Clicks a tree, knows if it failed
+function Chop: Boolean;
+var
+  ATPA: T2DPointArray;
+  i: Integer;
+  P: TPoint;
+begin
+  Result := isChopping;
+  if Result then Exit;
+  ATPA := FindTrees;
+  for i := 0 to High(ATPA) do
+  begin
+    P := ATPA[i].getMiddle;
+    Mouse(P.rand(RandomRange(-20, 20)), MOUSE_MOVE);
+    if isMouseOverText(['Chop', 'Arctic', 'Pine'], 100) then
+    begin
+      GetMousePos(P.x, P.y);
+      Mouse(P, MOUSE_LEFT);
+      minimap.waitFlag;
+      Result := waitFunc(@isChopping, 20, 2000);
+    end;
+    if (Result) then
+    begin
+      smartImage.clearArea(mainscreen.getBounds);
+      Break;
+    end;
+  end;
+  smartImage.clearArea(mainscreen.getBounds);
+end;
+
+
+//TRSChoose_Option._select, but won't mouse far left/far right of the option bar - more natural
+//comments, blank lines, and Print()'s removed to minimize space
+function TRSChooseOption._selectNarrow(txt: TStringArray; mouseAction: integer; aclose: boolean; matchPercent: extended; waitTime, movement: integer): boolean;
+var
+  optionArr: TOptionArray;
+  l, i, j, m: integer;
+  s: TStringArray;
+  a: extended;
+  b, narrowBx, tempBx: TBox;
+begin
+  if (not self.isOpen(waitTime)) then
+    exit();
+
+  optionArr := self.getOptions();
+
+  l := length(optionArr);
+
+  if (l < 1) then
+  begin
+    if (aclose) then
+      close();
+    exit();
+  end else
+  begin
+    setLength(s, l);
+    for i := 0 to (l -1) do
+      s[i] := optionArr[i].str;
+  end;
+  for i := 0 to high(optionArr) do
+    for j := 0 to high(txt) do
+    begin
+      if (matchPercent = 1.00) then // not using stringmatch
+        if (pos(txt[j], optionArr[i].str) > 0) then
+        begin
+          if (mouseAction <> MOUSE_NONE) then
+          begin        //edited portion
+            tempBx := optionArr[i].bounds;
+            narrowBx := IntToBox(tempBx.x1 + movement, tempBx.y1, tempBx.x2 - movement, tempBx.y2);
+            m := mouseSpeed;
+            mouseSpeed := 35;
+            mouseBox(narrowBx, mouseAction);
+            mouseSpeed := m;
+          end else // if it's mouse none lets see if we need to close
+            if (aclose) then
+              self.close();
+          exit(true);
+        end else
+          continue;
+      a := stringMatch(optionArr[i].str, txt[j]);
+      if (a >= matchPercent) then
+      begin
+        if (mouseAction <> MOUSE_NONE) then
+        begin
+          b := optionArr[i].bounds;
+          b.edit(2, 2, -2, -2); // shrink the box so there's no chance of clicking the wrong option
+          mouseBox(b, mouseAction)
+        end else // if it's mouse none lets see if we need to close
+          if (aclose) then
+            self.close();
+        exit(true);
+      end;
+   end;
+  if (aclose) then
+    close();
+end;
+
+
+//drops logs via 14th action bar slot. this does not interrupt woodcutting!
+//checks for presence of logs through a simple findcolortolerance
+function Drop: Boolean;
+var
+  Bx: TBox;
+  P: TPoint;
+begin
+  if actionBar.isSlotEmpty(14) then
+    Exit;
+  Bx := actionBar.getSlotBox(14);
+  if findColorTolerance(P.x, P.y, 4158093, Bx, 30) then
+    if actionBar.clickSlot(14, mouse_Right)then
+      Result := chooseOption._selectNarrow(['Drop'], mouse_Left, False, 1.00, 100, 100);
+end;
+
+
+function TRSChatBox.getXP(): integer;
+{------------------------------------------------------------------------------)
+  Info: Returns XP from the XP bar in the chatbox. Made by Ashaman88.
+(------------------------------------------------------------------------------}
+var
+  b: TBox;
+  s: String;
+  tpa : TPointArray;
+  atpa : T2DPointArray;
+  i,p: Integer;
+begin
+  B := self.getBounds();
+  B.edit(+(b.x2-b.x1)-140, +10, -5, -94);
+
+  findColorsTolerance(TPA, 14013909, b, 4, colorSetting(2, 0.00, 0.00));
+
+  if length(TPA) < 2 then
+  begin
+    writeLn('chatBox.getXP(): No XP found!');
+    exit;
+  end;
+
+  ATPA := tpa.cluster(5);
+
+  B := atpa.getbounds();
+  B.edit(-2, -2, +2, +3);
+  S := replace(tesseractgettext(B.x1, B.y1, B.x2, B.y2, FILTER_SMALL_CHARS), ' ', '', [rfReplaceAll]);
+  P := pos('x', S);
+
+  if P > 0 then
+    result := strToIntDef(extractFromStr(copy(S, P, length(S)), numbers), 0)
+  else
+    result := strToIntDef(extractFromStr(S, numbers), 0);
+
+  writeLn('chatBox.getXP(): XP found: ' + toStr(result));
+end;
+
+
+var
+  TStarted, BStarted: Boolean;
+
+//ty footballjds :^)
+function setupPlayer: boolean;
+begin
+  if (players[currentPlayer].isActive and players[currentPlayer].login) then
+  begin
+    wait(randomRange(50, 2000));
+    minimap.clickCompass;
+    wait(randomRange(50, 2000));
+    mainscreen.setAngle(MS_ANGLE_HIGH);
+    wait(randomRange(10, 2000));
+    exitTreasure;
+    if (Players[0].integers[99] < 0) then
+      Players[0].integers[99] := chatbox.getXP;
+    if not(TStarted) then
+    begin
+      TStarted := True;
+      T.start;
+    end;
+    //set break Time:
+    if not(BStarted) then
+    begin
+      Players[0].integers[4] := T.getTime + (Players[0].integers[0] + Random(Players[0].integers[1])) * 60000;
+      BStarted := True;
+    end;
+  end else players.next(false);
+  if (players.getActive < 1) then
+  begin
+    print('ALL PLAYERS INACTIVE', TDebug.FATAL);
+    terminateScript;
+  end;
+  result := isLoggedIn;
+end;
+
+
+var
+  AB: TTimeMarker; //Antiban time marker
+  NextAB: Integer; //when to do next antiban
+
+
+//ashaman88
+//modded for timing + personilization
+Procedure Antiban;
+Var
+  I, ABMin, ETA, h, m, s: Integer;
+Begin
+  smartImage.clearArea(mainscreen.getBounds);
+  if ((AB.time = -1) or (AB.getTime > NextAB)) then
+  begin
+    writeln('////////AB/////////');
+    I := Random(600);
+    Case I Of
+      //1: begin boredHuman(true); MainScreen.SetAngle(MS_ANGLE_HIGH); minimap.setAngle(MM_DIRECTION_NORTH); end;
+      1..7:
+        Begin
+          hoverSkill(SKILL_WOODCUTTING);
+          Wait(GaussRangeInt(1000,10000));
+          TabBackpack.Open;
+        End;
+      8..20: mouseMovingObject;
+      21..100: SleepAndMoveMouse(GaussRangeInt(100,1500));
+      101..400:
+        Begin
+          MouseOffClient(Random(4));
+          Wait(GaussRangeInt(0, 4000));
+        End;
+      401..600: writeln('Skipped this AB!');
+    End;
+    AB.reset; AB.start;
+    NextAB := AB.getTime + 6000 + gaussRangeInt(2000, 6000);
+  end;
+  minimap.setAngle(MM_DIRECTION_NORTH);
+  ETA := NextAB - AB.getTime;
+  smartImage.clearArea(mainscreen.getBounds);
+  smartImage.drawText('Next Antiban Procedure in ' + ToString(ETA) + ' ms', Point(10, 10), statChars, False, clYellow);
+End;
+
+
+procedure Report;
+var
+  XP, XPHR, h, m, s, W: Integer;
+  L1, L2, L3: string;
+begin
+  w := smartImage.getWidth;
+  smartImage.clearArea(IntToBox(592,517, w-1,555));
+  XP := chatbox.getXP - Players[0].integers[99];
+  ConvertTime(T.getTime, h, m, s);
+  XPHR := Round(XP * 1000.0 * (3600.0 / (T.getTime+1)));
+  L1 := 'Worked: ' + ToString(h) + ' H, ' + ToString(m) + ' M, ' + ToString(s) + ' S';
+  L2 := 'XP: ' + ToString(XP);
+  L3 := 'XP/HR: ' + ToString(XPHR);
+  writeln([L1, L2, L3]);
+  smartImage.drawTextLines([L1, L2, L3], Point(592, 517), statChars, False, clYellow);
+end;
+
+
+procedure HandleBreaks;
+var
+  BreakTimer: TTimeMarker;
+  ETA, h, m, s, W: Integer;
+begin
+  if (T.getTime > Players[0].integers[4]) then
+  begin
+    writeln('Time To Take A Break');
+    T.pause;
+    Players[currentPlayer].logout;
+    BreakTimer.start;
+    Players[0].integers[5] := BreakTimer.getTime + (Players[0].integers[2] + Random(Players[0].integers[3]))*60000;
+    while BreakTimer.getTime < Players[0].integers[5] do
+    begin
+      wait(1000);
+      ETA := Players[0].integers[5] - BreakTimer.getTime;
+      convertTime(ETA, h, m, s);
+      smartImage.clearArea(mainscreen.getBounds);
+      smartImage.drawTextLines(['Taking a Break', 'Time Before Resuming: ' + ToString(h) + ' Hours, ' + ToString(m) + ' Minutes, ' + ToString(s) + ' Seconds'], Point(10,10), statChars, False, clYellow);
+      writeln('Time Before Resuming: ' + ToString(h) + ' Hours, ' + ToString(m) + ' Minutes, ' + ToString(s) + ' Seconds');
+    end;
+    if not(setupPlayer) then
+    begin
+      print('UNABLE TO SET UP FIRST PLAYER', TDebug.FATAL);
+      terminateScript;
+    end;
+    T.start;
+    Players[0].integers[4] := T.getTime + (Players[0].integers[0] + Random(Players[0].integers[1])) * 60000;
+  end;
+  ETA := Players[0].integers[4] - T.getTime;
+  convertTime(ETA, h, m, s);
+  writeln('Time Before Break: ' + ToString(h) + ' Hours, ' + ToString(m) + ' Minutes, ' + ToString(s) + ' Seconds');
+  w := smartImage.getWidth;
+  smartImage.clearArea(IntToBox(592,555, w-1,569));
+  smartImage.drawText('Time Before Break: ' + ToString(h) + ' H, ' + ToString(m) + ' M, ' + ToString(s) + ' S', Point(592, 555), statChars, False, clYellow);
+  smartImage.clearArea(mainscreen.getBounds);
+end;
+
+
+procedure MainLoop;
+begin
+  HandleBreaks;
+  if not(isLoggedIn) then setupPlayer;
+  Report;
+  if not(Chop) then
+  begin
+    wait(5000);
+    Exit;
+  end;
+  while isChopping do
+  begin
+    AntiBan;
+    if (tabBackpack.count >= 5) then
+      while not(tabBackpack.isEmpty) do
+      begin
+        if Drop then
+          wait(1200 + RandomRange(0, 300));
+        if not(isChopping) then
+          Exit;
+      end;
+  end;
+end;
+
+
+begin
+  smartEnableDrawing := true;
+  SetupSRL;
+  DeclarePlayers;
+  Players[0].integers[99] := -1;
+  if not(setupPlayer) then
+  begin
+    print('UNABLE TO SET UP FIRST PLAYER', TDebug.FATAL);
+    terminateScript;
+  end;
+
+  while (players.getActive > 0) do mainLoop;
+end.
